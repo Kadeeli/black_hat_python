@@ -1,3 +1,6 @@
+import threading
+import time
+from netaddr import IPNetwork, IPAddress
 import socket
 import os
 import struct
@@ -5,6 +8,24 @@ from ctypes import *
 
 # host to listen on, EDIT THIS!
 host = "192.168.96.146"
+
+# subnet to target, EDIT THIS!
+subnet = "192.168.96.0/24"
+
+# magic string we'll check ICMP responses for
+magic_message = "PYUTHONRULES!"
+
+
+# this sprays out the UDP datagrams
+def udp_sender(subnet,magic_message):
+    time.sleep(5)
+    sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    for ip in IPNetwork(subnet):
+        try:
+            sender.sendto(magic_message, ("%s" % ip, 65212))
+        except:
+            pass
 
 
 # our IP header
@@ -19,8 +40,8 @@ class IP(Structure):
         ("ttl", c_ubyte),
         ("protocol_num", c_ubyte),
         ("sum", c_ushort),
-        ("src", c_ulong),
-        ("dst", c_ulong)
+        ("src", c_uint32),
+        ("dst", c_uint32)
     ]
 
     def __new__(self, socket_buffer=None):
@@ -74,8 +95,13 @@ sniffer.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
 if os.name == "nt":
     sniffer.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)
 
+# start sending packets
+t = threading.Thread(target=udp_sender,args=(subnet,magic_message))
+t.start()
+
 try:
     while True:
+
         # read in a packet
         raw_buffer = sniffer.recvfrom(65565)[0]
 
@@ -95,8 +121,17 @@ try:
             # create our ICMP structure
             icmp_header = ICMP(buf)
 
-            print "ICMP -> Type: %d Code: %d" % (icmp_header.type, icmp_header.code)
+            # print "ICMP -> Type: %d Code: %d" % (icmp_header.type, icmp_header.code)
 
+            # now check for the TYPE 3 and CODE 3 which indicates a host is up but no port available to talk to
+            if icmp_header.code == 3 and icmp_header.type == 3:
+
+                # check to make sure we are receiving the response that lands in our subnet
+                if IPAddress(ip_header.src_address) in IPNetwork(subnet):
+
+                    # test for our magic message
+                    if raw_buffer[len(raw_buffer) - len(magic_message):] == magic_message:
+                        print "Host Up: %s" % ip_header.src_address
 
 # handle CRTL-C
 except KeyboardInterrupt:
